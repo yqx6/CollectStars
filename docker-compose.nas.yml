@@ -16,7 +16,8 @@
 
 services:
   mongo:
-    image: mongo:7
+    # NAS 老 CPU 无 AVX 指令集，mongo 5.0+ 无法启动，固定用 4.4（最后一个无需 AVX 的版本）
+    image: mongo:4.4
     container_name: star-mongo
     restart: unless-stopped
     environment:
