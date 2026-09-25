@@ -42,8 +42,68 @@ npm run dev
 前端开发模式通过 vite proxy 把 `/api` 转到 `localhost:3000`。
 
 ## 接口
-- `GET /api/stars` 所有星星（含日期、是否兑换）
+- `GET /api/stars` 所有星星（含日期、是否灰掉、所属奖励）
 - `POST /api/checkin` 打卡
 - `POST /api/redeem {content, starIds[5]}` 兑换
 - `GET /api/rewards` 奖励列表
 - `GET /api/stats` 统计总数
+
+## 镜像发布 / 更新（GHCR）
+
+成品镜像地址（免 build，直接拉）：
+- `ghcr.io/yqx6/collectstars-backend:latest`
+- `ghcr.io/yqx6/collectstars-frontend:latest`
+
+### 1. 首次准备（只需做一次）
+
+1. GitHub 建 Token：`Settings -> Developer settings -> Personal access tokens -> Tokens (classic) -> Generate new token (classic)`，勾选 `write:packages` + `read:packages`（仓库私有还需勾 `repo`）。
+2. 登录：
+```bash
+echo <TOKEN> | docker login ghcr.io -u yqx6 --password-stdin
+```
+3. 把包设为公开（否则 NAS 免登录拉取会 `denied`）：`头像 -> Your profile -> Packages -> collectstars-backend/frontend -> Package settings -> Change visibility -> Public`。
+
+### 2. 改完代码后重新构建并上传
+
+在项目根目录执行：
+
+```bash
+docker login ghcr.io -u yqx6 --password-stdin
+docker build -t ghcr.io/yqx6/collectstars-backend:latest ./backend
+docker build -t ghcr.io/yqx6/collectstars-frontend:latest ./frontend
+docker push ghcr.io/yqx6/collectstars-backend:latest
+docker push ghcr.io/yqx6/collectstars-frontend:latest
+```
+
+建议同时打版本标签，便于回滚：
+```bash
+docker tag ghcr.io/yqx6/collectstars-backend:latest ghcr.io/yqx6/collectstars-backend:2026-09-25
+docker push ghcr.io/yqx6/collectstars-backend:2026-09-25
+```
+
+### 3. 服务器 / NAS 上更新
+
+```bash
+docker pull ghcr.io/yqx6/collectstars-backend:latest
+docker pull ghcr.io/yqx6/collectstars-frontend:latest
+docker compose -f docker-compose.nas.yml pull
+docker compose -f docker-compose.nas.yml up -d
+docker images | grep collectstars
+```
+
+### 4. 常见报错
+
+- `Head "https://ghcr.io/v2/..." denied / unauthorized`：包是 Private 且未登录。按上面第 1 步改 Public，或先 `docker login ghcr.io`。
+- `timeout / TLS handshake timeout`：NAS 直连 ghcr.io 网络不通，给 NAS 配代理或改用国内 Registry。
+- NAS 是 ARM 机型启动失败：当前镜像为 amd64，需用 `docker buildx build --platform linux/arm64` 重打。
+
+## NAS 部署
+
+使用 `docker-compose.nas.yml`（群晖 Container Manager / 威联通通用，只用成品镜像）：
+
+```bash
+docker compose -f docker-compose.nas.yml up -d
+```
+
+- 前端：http://NAS_IP:3457
+- 后端：http://NAS_IP:3000/api/stats
