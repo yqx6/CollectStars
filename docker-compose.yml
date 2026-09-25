@@ -1,0 +1,33 @@
+services:
+  mongo:
+    image: mongo:7
+    container_name: star-mongo
+    restart: always
+    volumes:
+      - mongo-data:/data/db
+    ports:
+      - "27017:27017"
+
+  backend:
+    build: ./backend
+    container_name: star-backend
+    restart: always
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/star_app
+      - PORT=3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - mongo
+
+  frontend:
+    build: ./frontend
+    container_name: star-frontend
+    restart: always
+    ports:
+      - "3457:80"
+    depends_on:
+      - backend
+
+volumes:
+  mongo-data:
