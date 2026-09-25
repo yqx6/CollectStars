@@ -1,0 +1,69 @@
+# CollectStars - NAS 专用编排（群晖 / 威联通 / 铁威马通用）
+# 特点：只用成品镜像，无需在 NAS 上 build；重启策略适合 NAS；数据持久化
+#
+# 使用方法（群晖 Container Manager 为例）：
+#   1. 将本文件上传到 NAS，如 /volume1/docker/collectstars/docker-compose.nas.yml
+#   2. Container Manager -> 项目 -> 新增 -> 选择此 yml -> 启动
+#   3. 前端 http://NAS_IP:3457，后端 http://NAS_IP:3000/api/stats
+#
+# 更新镜像：
+#   docker compose -f docker-compose.nas.yml pull && docker compose -f docker-compose.nas.yml up -d
+#
+# 说明：
+#   - backend/frontend 来自 GHCR 成品镜像（amd64），x86 群晖可直接用
+#   - 若 NAS 是 ARM 机型（部分入门群晖/玩客云等），首次启动失败请在电脑上
+#     docker buildx build --platform linux/arm64 后重新推送，或改用源码版 docker-compose.yml 在 NAS 上 build
+
+services:
+  mongo:
+    image: mongo:7
+    container_name: star-mongo
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - mongo-data:/data/db
+    # NAS 上一般不需要把 mongo 暴露到外网，只给 backend 内网用即可
+    # 如需用 Navicat/Compass 直连调试，再放开下面一行：
+    # ports:
+    #   - "27017:27017"
+    networks:
+      - star-net
+
+  backend:
+    image: ghcr.io/yqx6/collectstars-backend:latest
+    container_name: star-backend
+    restart: unless-stopped
+    pull_policy: always
+    environment:
+      - TZ=Asia/Shanghai
+      - PORT=3000
+      - MONGO_URI=mongodb://mongo:27017/star_app
+    ports:
+      - "3000:3000"
+    depends_on:
+      - mongo
+    networks:
+      - star-net
+
+  frontend:
+    image: ghcr.io/yqx6/collectstars-frontend:latest
+    container_name: star-frontend
+    restart: unless-stopped
+    pull_policy: always
+    environment:
+      - TZ=Asia/Shanghai
+    ports:
+      - "3457:80"
+    depends_on:
+      - backend
+    networks:
+      - star-net
+
+volumes:
+  mongo-data:
+    driver: local
+
+networks:
+  star-net:
+    driver: bridge
