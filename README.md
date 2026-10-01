@@ -107,3 +107,24 @@ docker compose -f docker-compose.nas.yml up -d
 
 - 前端：http://NAS_IP:3457
 - 后端：http://NAS_IP:3000/api/stats
+
+## 数据归档 / 异地重建
+
+打卡数据归档在 `backend/seed.json`（当前 4 条，各 1 颗：2026-09-25 / 09-28 / 09-29 / 10-01）。
+
+在别处重新部署后导入（backend 容器内执行）：
+
+```bash
+# 把本机 backend/seed.json 拷进后端容器（或 NAS 上直接放文件）
+docker cp backend/seed.json star-backend:/app/seed.json
+docker cp backend/seed.js star-backend:/app/seed.js
+docker exec star-backend node seed.js            # 空库导入
+# docker exec star-backend node seed.js --force  # 有数据时清空重建
+```
+
+也可以用 `MONGO_URI` 直连导入：
+
+```bash
+cd backend
+MONGO_URI=mongodb://<目标mongo>:27017/star_app node seed.js --force
+```

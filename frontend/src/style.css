@@ -1,3 +1,7 @@
 * { box-sizing: border-box; }
-body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #0f172a; color: #e2e8f0; }
-button { cursor: pointer; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #0f172a; color: #e2e8f0; overflow-x: hidden; min-height: 100dvh; }
+#app { min-height: 100dvh; }
+button { cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+input { font-size: 16px; }
+img { max-width: 100%; }

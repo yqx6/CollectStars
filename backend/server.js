@@ -13,7 +13,9 @@ app.use(express.json());
 const starSchema = new mongoose.Schema({
   acquiredAt: { type: Date, default: Date.now },
   redeemed: { type: Boolean, default: false },
-  rewardId: { type: mongoose.Schema.Types.ObjectId, ref: 'Reward', default: null }
+  rewardId: { type: mongoose.Schema.Types.ObjectId, ref: 'Reward', default: null },
+  isBonus: { type: Boolean, default: false },
+  bonusGroup: { type: String, default: null }
 });
 const Star = mongoose.model('Star', starSchema);
 
@@ -47,25 +49,38 @@ app.get('/api/stars', async (req, res) => {
   })));
 });
 
-// 打卡：每天限 1 颗
+// 打卡：每天限 1 次，基础 1 颗 + 可选额外奖励 0-3 颗
 app.post('/api/checkin', async (req, res) => {
+  let bonus = 0;
+  if (req.body && req.body.bonus !== undefined) {
+    bonus = Number(req.body.bonus);
+    if (!Number.isInteger(bonus) || bonus < 0 || bonus > 3) {
+      return res.status(400).json({ message: '额外奖励只能是 0-3 颗' });
+    }
+  }
   const { start, end } = dayRange();
   const existed = await Star.findOne({ acquiredAt: { $gte: start, $lte: end } });
   if (existed) return res.status(400).json({ message: '今天已经打过卡了，明天再来吧' });
-  const star = await Star.create({});
-  res.json(star);
+  const now = new Date();
+  const bonusGroup = new mongoose.Types.ObjectId().toString();
+  const docs = [{ acquiredAt: now, isBonus: false, bonusGroup }];
+  for (let i = 0; i < bonus; i++) {
+    docs.push({ acquiredAt: now, isBonus: true, bonusGroup });
+  }
+  const stars = await Star.insertMany(docs);
+  res.json({ stars, base: 1, bonus });
 });
 
-// 兑换：前端传 starIds（5个）+ content；若不传 starIds 则自动取最早的5颗未兑换
+// 兑换：前端传 starIds（同格堆叠后一行 5 格可能对应 5+ 颗）+ content；若不传 starIds 则自动取最早的5颗未兑换
 app.post('/api/redeem', async (req, res) => {
   const { content, starIds } = req.body;
   if (!content || !String(content).trim()) {
     return res.status(400).json({ message: '请输入奖励内容' });
   }
   let stars;
-  if (Array.isArray(starIds) && starIds.length === 5) {
+  if (Array.isArray(starIds) && starIds.length >= 5) {
     stars = await Star.find({ _id: { $in: starIds }, redeemed: false });
-    if (stars.length !== 5) return res.status(400).json({ message: '所选星星数量不足5颗或已有兑换' });
+    if (stars.length !== starIds.length) return res.status(400).json({ message: '所选星星中有已兑换的，请刷新重试' });
   } else {
     stars = await Star.find({ redeemed: false }).sort({ acquiredAt: 1 }).limit(5);
     if (stars.length < 5) return res.status(400).json({ message: '可用星星不足5颗' });
@@ -91,6 +106,7 @@ app.get('/api/rewards', async (req, res) => {
 app.get('/api/stats', async (req, res) => {
   const total = await Star.countDocuments();
   const redeemed = await Star.countDocuments({ redeemed: true });
+  const bonus = await Star.countDocuments({ isBonus: true });
   const rewards = await Reward.countDocuments();
   const { start, end } = dayRange();
   const checkedToday = await Star.exists({ acquiredAt: { $gte: start, $lte: end } });
@@ -99,6 +115,8 @@ app.get('/api/stats', async (req, res) => {
     redeemed,                 // 已兑换（灰掉）的数量
     available: total - redeemed, // 可用于兑换的数量
     rewards,                  // 兑换次数
+    bonus,                    // 奖励星总数
+    base: total - bonus,       // 基础打卡星总数
     checkedToday: !!checkedToday
   });
 });
