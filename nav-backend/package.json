@@ -1,0 +1,14 @@
+{
+  "name": "nav-backend",
+  "version": "1.0.0",
+  "description": "站点导航后端 Node + Express + MongoDB",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "mongoose": "^8.4.0"
+  }
+}
