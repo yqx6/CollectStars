@@ -14,7 +14,7 @@
         </button>
         <button class="btn ghost" @click="loadAll">刷新</button>
       </div>
-      <p class="tip">规则：每天打卡得 1 颗星星，可选额外奖励 1-3 颗（同格重叠展示） · 每集满 5 格可在该行旁边点击「换取」输入奖励内容 · 换取后星星变灰</p>
+      <p class="tip">规则：每天打卡得 1 颗星星，可选额外奖励 1-3 颗（同格重叠展示） · 攒够 5 颗即可点击「换取」（每次只消耗最早攒下的 5 颗，剩下的继续累积） · 换取后星星变灰</p>
     </header>
 
     <main>
@@ -38,8 +38,8 @@
                   v-for="(st, k) in c.stars"
                   :key="st._id || k"
                   class="layer"
-                  :class="{ 'layer-bonus': st.isBonus }"
-                  :style="stackStyle(k, c.stars.length)"
+                  :class="{ 'layer-bonus': st.isBonus, 'layer-used': st.redeemed }"
+                  :style="st.isBonus ? arcPos(c.bonusCount, k - 1) : null"
                 >★</span>
               </div>
               <small>{{ shortDate(c.date) }}<em v-if="c.bonusCount > 0" class="bonus-tag">+{{ c.bonusCount }}奖</em></small>
@@ -51,13 +51,13 @@
         </div>
         <div class="side">
           <template v-if="row.status === 'redeemable'">
-            <button class="btn warn" @click="openRedeem(row)">换取 🎁</button>
+            <button class="btn warn" @click="openRedeem">换取 🎁</button>
           </template>
           <template v-else-if="row.status === 'redeemed'">
             <span class="badge">已换：{{ row.rewardContent }}</span>
           </template>
           <template v-else>
-            <span class="progress">{{ row.filled }}/5格 · {{ row.starCount }}颗</span>
+            <span class="progress">{{ row.filled }}/5格 · {{ row.remainingCount }}颗</span>
           </template>
         </div>
       </div>
@@ -106,11 +106,42 @@
       </div>
     </div>
 
-    <!-- 换取弹窗：输入奖励内容 -->
+    <!-- 换取弹窗：输入或选择奖励内容 -->
     <div v-if="redeemRow !== null" class="mask" @click.self="redeemRow = null">
       <div class="modal">
-        <h3>换取本行 {{ redeemRow.starCount }} 颗星星 🎁</h3>
-        <input v-model="rewardContent" placeholder="输入换取的奖励内容，例如：看一场电影" />
+        <h3>换取 5 颗星星 🎁</h3>
+        <p class="modal-tip">本次消耗最早攒下的 5 颗，兑换后还剩 <b class="hl">{{ redeemRow.leftover }}</b> 颗继续累积；可手动输入，也可从历史奖励中下拉选择或点标签快速填入</p>
+        <div class="combo">
+          <input
+            v-model="rewardContent"
+            placeholder="输入换取的奖励内容，例如：看一场电影"
+            @focus="showSuggest = true"
+            @input="showSuggest = true"
+            @blur="showSuggest = false"
+          />
+          <ul v-if="showSuggest && suggestOptions.length" class="suggest">
+            <li
+              v-for="opt in suggestOptions"
+              :key="opt.content"
+              class="suggest-item"
+              :class="{ active: rewardContent.trim() === opt.content }"
+              @mousedown.prevent
+              @click="pickContent(opt.content)"
+            >
+              <span>{{ opt.content }}</span>
+              <em v-if="opt.count > 1">×{{ opt.count }}</em>
+            </li>
+          </ul>
+        </div>
+        <div v-if="suggestOptions.length" class="tags">
+          <button
+            v-for="opt in suggestOptions.slice(0, 8)"
+            :key="opt.content"
+            class="tag"
+            :class="{ active: rewardContent.trim() === opt.content }"
+            @click="pickContent(opt.content)"
+          >{{ opt.content }}</button>
+        </div>
         <div class="modal-actions">
           <button class="btn ghost" @click="redeemRow = null">取消</button>
           <button class="btn warn" :disabled="!rewardContent.trim()" @click="confirmRedeem">确认换取</button>
@@ -130,6 +161,7 @@ const loading = ref(false)
 const detail = ref(null)
 const redeemRow = ref(null)
 const rewardContent = ref('')
+const showSuggest = ref(false)
 const checkinModal = ref(false)
 const bonusPick = ref(0)
 
@@ -157,50 +189,92 @@ const cells = computed(() => {
   })
 })
 
-// 每 5 格切一行，补空位形成二维展示
+// 按获得顺序列出所有未兑换星星 id（每次兑换只消耗最早的 5 颗，剩余继续累积）
+const unredeemedIds = computed(() =>
+  cells.value.flatMap(c => c.stars).filter(s => !s.redeemed).map(s => s._id)
+)
+
+// 每 5 格切一行，补空位形成二维展示；
+// 「换取」按钮落在第 5 颗未兑换星所在行（累计满 5 颗即可换，不要求该行满格）
 const rows = computed(() => {
   const list = cells.value
+  // 找到第 5 颗未兑换星所在格，进而确定所在行
+  let need = 5
+  let redeemCellIndex = -1
+  for (let i = 0; i < list.length && need > 0; i++) {
+    const n = list[i].stars.filter(s => !s.redeemed).length
+    if (n >= need) { redeemCellIndex = i; break }
+    need -= n
+  }
+  const redeemRowIndex = redeemCellIndex === -1 ? -1 : Math.floor(redeemCellIndex / 5)
   const out = []
   for (let i = 0; i < list.length; i += 5) {
+    const rowIndex = i / 5
     const group = list.slice(i, i + 5)
     const slots = [...group]
     while (slots.length < 5) slots.push(null)
     const allStars = group.flatMap(c => c.stars)
+    const remainingCount = allStars.filter(s => !s.redeemed).length
     let status = 'collecting'
     let rewardContent = ''
-    if (group.length === 5) {
-      if (allStars.every(s => s.redeemed)) {
-        status = 'redeemed'
-        rewardContent = group[0].rewardContent || ''
-      } else if (allStars.every(s => !s.redeemed)) {
-        status = 'redeemable'
-      } else {
-        // 同一行出现部分兑换（跨行自动兑换时），按已兑换处理
-        status = allStars.some(s => s.redeemed) ? 'redeemed' : 'collecting'
-        rewardContent = group.find(c => c.rewardContent)?.rewardContent || ''
-      }
+    if (allStars.length > 0 && remainingCount === 0) {
+      status = 'redeemed'
+      const contents = [...new Set(allStars.map(s => s.rewardContent).filter(Boolean))]
+      rewardContent = contents.length > 1 ? `共${contents.length}次兑换` : (contents[0] || '')
+    } else if (rowIndex === redeemRowIndex) {
+      status = 'redeemable'
     }
     out.push({
       slots,
       status,
       rewardContent,
-      starIds: allStars.map(s => s._id),
       filled: group.length,
-      starCount: allStars.length
+      remainingCount
     })
   }
   // 还没满一行时也展示一行进度（如果正好整除则加一个空行提示）
   if (list.length % 5 === 0) {
-    out.push({ slots: [null, null, null, null, null], status: 'collecting', rewardContent: '', starIds: [], filled: 0, starCount: 0 })
+    out.push({ slots: [null, null, null, null, null], status: 'collecting', rewardContent: '', filled: 0, remainingCount: 0 })
   }
   return out
 })
 
-// 堆叠偏移：首颗（基础）在最前右下，奖励星依次向左上垫后
-function stackStyle(k, n) {
-  const step = 7
-  const off = (n - 1 - k) * step
-  return { transform: `translate(${off}px, ${off}px)`, zIndex: n - k }
+// 历史奖励内容去重（按出现次数排序），用于下拉/标签快速选择
+const contentOptions = computed(() => {
+  const map = new Map()
+  for (const r of rewards.value) {
+    const c = String(r.content || '').trim()
+    if (!c) continue
+    map.set(c, (map.get(c) || 0) + 1)
+  }
+  return [...map.entries()]
+    .map(([content, count]) => ({ content, count }))
+    .sort((a, b) => b.count - a.count)
+})
+
+// 按当前输入过滤（不区分大小写）
+const suggestOptions = computed(() => {
+  const q = rewardContent.value.trim().toLowerCase()
+  const list = q
+    ? contentOptions.value.filter(o => o.content.toLowerCase().includes(q))
+    : contentOptions.value
+  return list.slice(0, 8)
+})
+
+// 弧线展示：打卡星居中，奖励星落在以打卡星中心为圆心、半径 R 的圆上，
+// 取右上象限 15°~75° 弧段（x 右正、y 上正）；偏移用 em 随格子字号缩放。
+// 注意：偏移写在奖励星自身上，其字号是 BONUS 号，所以换算成自身 em 要除以 BONUS
+const BONUS = 0.62  // 奖励星字号（相对打卡星）
+const ARC_R = 0.85  // 弧半径（相对打卡星字号，约与星星相切）
+function arcPos(m, i) {
+  const a = m <= 1 ? 45 : 15 + (60 * i) / (m - 1)
+  const rad = (a * Math.PI) / 180
+  const k = ARC_R / BONUS
+  return {
+    left: `calc(50% + ${(k * Math.cos(rad)).toFixed(3)}em)`,
+    top: `calc(50% - ${(k * Math.sin(rad)).toFixed(3)}em)`,
+    fontSize: BONUS + 'em'
+  }
 }
 
 function formatDate(d) {
@@ -246,9 +320,17 @@ function openCheckin() {
 function confirmCheckin() { return checkin() }
 
 function openDetail(c) { detail.value = c }
-function openRedeem(row) {
-  redeemRow.value = row
+function openRedeem() {
+  redeemRow.value = {
+    starIds: unredeemedIds.value.slice(0, 5),
+    leftover: unredeemedIds.value.length - 5
+  }
   rewardContent.value = ''
+  showSuggest.value = false
+}
+function pickContent(c) {
+  rewardContent.value = c
+  showSuggest.value = false
 }
 async function confirmRedeem() {
   const res = await fetch('/api/redeem', {
@@ -286,15 +368,18 @@ onMounted(loadAll)
 .star small { font-size: 11px; color: #94a3b8; text-shadow: none; }
 .star.gray { color: #475569; text-shadow: none; filter: grayscale(1); }
 .star.empty { color: #334155; cursor: default; }
-.star.cell.has-bonus { border: 1px solid rgba(251,146,60,.45); }
-.stack { position: relative; width: 52px; height: 44px; }
-.layer { position: absolute; left: 50%; top: 50%; margin: -22px 0 0 -18px; width: 36px; height: 44px; display: flex; align-items: center; justify-content: center; color: #facc15; text-shadow: 0 0 12px rgba(250,204,21,.6); }
-.layer-bonus { color: #fb923c; text-shadow: 0 0 14px rgba(251,146,60,.7); }
+.star.cell.has-bonus { border: 1px solid rgba(192,132,252,.45); }
+.stack { position: relative; display: flex; align-items: center; justify-content: center; width: 100%; height: 54px; }
+.layer { position: relative; z-index: 2; margin: 0; width: auto; height: auto; display: inline-block; line-height: 1; color: #facc15; text-shadow: 0 0 12px rgba(250,204,21,.6); }
+.layer-bonus { position: absolute; z-index: 1; transform: translate(-50%, -50%); }
+.layer-bonus { color: #c084fc; text-shadow: 0 0 14px rgba(192,132,252,.7); }
 .star.gray .layer { color: #475569; text-shadow: none; }
+.layer.layer-used { color: #475569; text-shadow: none; }
 .count-badge { position: absolute; top: -8px; right: -6px; min-width: 22px; height: 22px; padding: 0 5px; border-radius: 11px; background: #f97316; color: #fff; font-size: 12px; font-style: normal; font-weight: bold; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(0,0,0,.4); z-index: 10; }
-.bonus-tag { font-style: normal; color: #fb923c; margin-left: 3px; }
-.bonus-stat b { color: #fb923c !important; }
+.bonus-tag { font-style: normal; color: #c084fc; margin-left: 3px; }
+.bonus-stat b { color: #c084fc !important; }
 .modal-tip { color: #94a3b8; font-size: 14px; margin: 8px 0 0; }
+.modal-tip .hl { color: #facc15; font-size: 16px; }
 .modal-preview { font-size: 14px; }
 .modal-preview .hl { color: #facc15; font-size: 18px; }
 .bonus-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }
@@ -312,7 +397,17 @@ onMounted(loadAll)
 .modal { background: #1e293b; border-radius: 14px; padding: 20px; width: 100%; max-width: 380px; max-height: calc(100dvh - 32px); overflow-y: auto; }
 .modal h3 { margin: 0; font-size: clamp(16px, 4.5vw, 18px); }
 .modal input { width: 100%; padding: 12px 10px; border-radius: 8px; border: 1px solid #334155; margin: 12px 0; background: #0f172a; color: #fff; font-size: 16px; }
-.modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.combo { position: relative; margin-top: 12px; }
+.combo input { margin: 0; }
+.suggest { position: absolute; left: 0; right: 0; top: 100%; z-index: 20; margin: 6px 0 0; padding: 4px; list-style: none; background: #0f172a; border: 1px solid #334155; border-radius: 8px; max-height: 190px; overflow-y: auto; box-shadow: 0 10px 26px rgba(0,0,0,.5); }
+.suggest-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px; border-radius: 6px; cursor: pointer; font-size: 14px; color: #e2e8f0; }
+.suggest-item:hover, .suggest-item.active { background: #1e293b; color: #facc15; }
+.suggest-item em { font-style: normal; color: #94a3b8; font-size: 12px; flex-shrink: 0; }
+.tags { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
+.tag { background: #0f172a; border: 1px solid #334155; color: #cbd5e1; border-radius: 999px; padding: 7px 12px; font-size: 13px; cursor: pointer; }
+.tag:active { transform: scale(.97); }
+.tag.active { background: #f97316; border-color: #f97316; color: #fff; font-weight: bold; }
+.modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
 .modal-actions .btn { flex: 1; }
 @media (min-width: 641px) {
   .modal-actions .btn { flex: none; }
@@ -331,6 +426,7 @@ onMounted(loadAll)
   .row { flex-direction: column; align-items: stretch; padding: 12px; gap: 10px; }
   .stars { gap: 6px; }
   .star { border-radius: 10px; min-height: 60px; }
+  .stack { height: 44px; }
   .star small { font-size: 10px; transform: scale(.92); }
   .side { width: 100%; }
   .side .btn.warn { width: 100%; padding: 12px; }

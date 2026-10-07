@@ -71,14 +71,15 @@ app.post('/api/checkin', async (req, res) => {
   res.json({ stars, base: 1, bonus });
 });
 
-// 兑换：前端传 starIds（同格堆叠后一行 5 格可能对应 5+ 颗）+ content；若不传 starIds 则自动取最早的5颗未兑换
+// 兑换：前端传 starIds（同格堆叠后一行可能对应 5+ 颗，只要数量 ≥ 5 即可兑换）+ content；若不传 starIds 则自动取最早的5颗未兑换
 app.post('/api/redeem', async (req, res) => {
   const { content, starIds } = req.body;
   if (!content || !String(content).trim()) {
     return res.status(400).json({ message: '请输入奖励内容' });
   }
   let stars;
-  if (Array.isArray(starIds) && starIds.length >= 5) {
+  if (Array.isArray(starIds)) {
+    if (starIds.length < 5) return res.status(400).json({ message: '至少需要5颗星星才能兑换' });
     stars = await Star.find({ _id: { $in: starIds }, redeemed: false });
     if (stars.length !== starIds.length) return res.status(400).json({ message: '所选星星中有已兑换的，请刷新重试' });
   } else {
